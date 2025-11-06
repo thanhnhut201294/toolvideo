@@ -11,7 +11,7 @@
     }
     *{box-sizing:border-box}
     body{font-family:Inter,ui-sans-serif,system-ui,Arial,sans-serif;background:var(--bg);margin:0;padding:28px;display:flex;justify-content:center}
-    .app{width:1100px;max-width:96%}
+    .app{width:1200px;max-width:96%}
     header{display:flex;gap:12px;align-items:center;margin-bottom:12px}
     h1{font-size:18px;margin:0}
     .card{background:var(--card);padding:14px;border-radius:12px;box-shadow:0 8px 24px rgba(2,6,23,0.06)}
@@ -28,10 +28,12 @@
     th{background:#fbfdff;position:sticky;top:0}
     td.center{text-align:center}
     .cover{width:72px;height:72px;object-fit:cover;border-radius:8px}
-    .truncate{max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .truncate{max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .tag-ok{color:var(--ok);font-weight:700}
     .tag-err{color:var(--err);font-weight:700}
-    @media(max-width:980px){ .cover{width:56px;height:56px} .truncate{max-width:200px} }
+    a.link{color:var(--accent);text-decoration:none}
+    a.link:hover{text-decoration:underline}
+    @media(max-width:980px){ .cover{width:56px;height:56px} .truncate{max-width:180px} }
   </style>
 </head>
 <body>
@@ -39,12 +41,12 @@
     <header>
       <div>
         <h1>🎬 TikTok Batch Fetcher (Worker)</h1>
-        <div class="muted">Dùng Worker: <code>https://tikwmcom.thanhnhut201294.workers.dev</code> — dán 1 link / 1 dòng</div>
+        <div class="muted">Worker: <code>https://tikwmcom.thanhnhut201294.workers.dev</code></div>
       </div>
     </header>
 
     <div class="card">
-      <label class="muted">Danh sách link TikTok (mỗi link 1 dòng):</label>
+      <label class="muted">Dán danh sách link TikTok (mỗi link 1 dòng):</label>
       <textarea id="inputUrls" placeholder="https://www.tiktok.com/@user/video/123...⏎https://vt.tiktok.com/xxxx/"></textarea>
 
       <div class="controls">
@@ -60,230 +62,157 @@
         <table id="resultTable">
           <thead>
             <tr>
-              <th style="width:48px">STT</th>
-              <th style="width:96px">Ảnh</th>
+              <th>STT</th>
+              <th>Ảnh</th>
+              <th>Tên kênh</th>
               <th>Caption</th>
-              <th style="width:110px">View</th>
-              <th style="width:90px">Like</th>
-              <th style="width:110px">Comment</th>
-              <th style="width:90px">Save</th>
-              <th style="width:90px">Share</th>
-              <th style="width:90px" class="center">Trạng thái</th>
+              <th>View</th>
+              <th>Like</th>
+              <th>Comment</th>
+              <th>Save</th>
+              <th>Share</th>
+              <th>Link video</th>
+              <th class="center">Trạng thái</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
         </table>
       </div>
 
-      <p class="muted" style="margin-top:10px">Ghi chú: caption hiển thị rút gọn; file xuất sẽ chứa caption đầy đủ. Throttle 600ms giữa các request để giảm khả năng bị rate-limit.</p>
+      <p class="muted" style="margin-top:10px">⚡ Caption hiển thị rút gọn; file xuất chứa caption đầy đủ. Mỗi lần quét có delay 600ms để tránh giới hạn.</p>
     </div>
   </div>
 
-  <!-- SheetJS -->
   <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
-
   <script>
-    // ==== Cấu hình ====
     const WORKER_BASE = 'https://tikwmcom.thanhnhut201294.workers.dev/?url=';
     const THROTTLE_MS = 600;
 
-    // ==== Elements ====
     const input = document.getElementById('inputUrls');
     const tbody = document.getElementById('tbody');
     const statusEl = document.getElementById('status');
-    const btnFetch = document.getElementById('btnFetch');
-    const btnClear = document.getElementById('btnClear');
-    const btnSample = document.getElementById('btnSample');
     const btnCsv = document.getElementById('btnCsv');
     const btnXlsx = document.getElementById('btnXlsx');
 
-    let dataStore = []; // lưu kết quả đầy đủ cho export
+    let dataStore = [];
 
-    function setStatus(msg){ statusEl.textContent = msg }
+    const sleep = (ms)=> new Promise(r=>setTimeout(r,ms));
+    const setStatus = (msg)=> statusEl.textContent = msg;
+    const normalizeUrl = (u)=> { if(!u.startsWith('http')) return 'https://' + u.trim(); return u.trim(); };
 
-    function normalizeUrl(raw){
-      if(!raw) return '';
-      let u = raw.trim();
-      if(!u) return '';
-      // fix thiếu scheme
-      if(!/^https?:\/\//i.test(u)) u = 'https://' + u;
-      // convert vm/vi shortcut? leave it - Worker handles encoding
-      return u;
-    }
+    document.getElementById('btnSample').onclick = ()=>{
+      input.value = 'https://www.tiktok.com/@hatothephuong261001/video/7551300167027281160\nhttps://www.tiktok.com/@nba/video/7423837056471182634';
+    };
+    document.getElementById('btnClear').onclick = ()=>{ tbody.innerHTML=''; dataStore=[]; setStatus('Bảng trống'); };
 
-    function makeRow(i, url){
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td class="center">${i}</td>
-        <td class="center"><img src="" class="cover" alt="cover" style="display:none"></td>
-        <td class="truncate"><span class="short">(Chưa có)</span> <a href="#" class="more" style="margin-left:6px;display:none">show</a></td>
-        <td class="center v-view">—</td>
-        <td class="center v-like">—</td>
-        <td class="center v-comment">—</td>
-        <td class="center v-save">—</td>
-        <td class="center v-share">—</td>
-        <td class="center status">Chưa</td>
-      `;
-      // store original url on row for later export
-      tr.dataset.url = url;
-      return tr;
-    }
+    document.getElementById('btnFetch').onclick = async ()=>{
+      const urls = input.value.split(/\r?\n/).map(normalizeUrl).filter(Boolean);
+      if(!urls.length) return alert('Vui lòng nhập ít nhất 1 link TikTok');
+      tbody.innerHTML=''; dataStore=[]; setStatus(`Đang xử lý ${urls.length} link...`);
 
-    btnSample.addEventListener('click', ()=> {
-      input.value = 'https://www.tiktok.com/@letuankhang2002/video/7560651173431135489\nhttps://www.tiktok.com/@letuankhang2002/video/7550634696179338512';
-    });
+      urls.forEach((u,i)=>tbody.appendChild(makeRow(i+1,u)));
 
-    btnClear.addEventListener('click', ()=> {
-      tbody.innerHTML = ''; dataStore = []; setStatus('Bảng đã xoá');
-    });
-
-    btnFetch.addEventListener('click', async ()=> {
-      const lines = input.value.split(/\r?\n/).map(l=>normalizeUrl(l)).filter(Boolean);
-      if(lines.length === 0){ alert('Dán ít nhất 1 link TikTok (mỗi link 1 dòng).'); return; }
-
-      tbody.innerHTML = ''; dataStore = [];
-      setStatus(`Bắt đầu xử lý ${lines.length} video...`);
-
-      // tạo rows
-      lines.forEach((u, idx)=> tbody.appendChild(makeRow(idx+1, u)) );
-
-      for(let i=0;i<lines.length;i++){
-        const url = lines[i];
+      for(let i=0;i<urls.length;i++){
+        const url = urls[i];
         const row = tbody.children[i];
         const statusCell = row.querySelector('.status');
-        statusCell.textContent = 'Đang...';
-        setStatus(`Xử lý ${i+1}/${lines.length}`);
+        statusCell.textContent='Đang...';
 
         try {
-          const apiUrl = WORKER_BASE + encodeURIComponent(url);
-          const res = await fetch(apiUrl);
-          // nếu fetch thất bại do network/CORS, catch sẽ xử lý
+          const res = await fetch(WORKER_BASE+encodeURIComponent(url));
           const json = await res.json();
+          let data = json.data ? json.data : json;
 
-          // TikWM trả cấu trúc: { code:0, data: { ... } } OR bạn Worker có thể trả chính data
-          let data;
-          if (json && json.code === 0 && json.data) {
-            data = json.data;
-          } else if (json && json.id && (json.stats || json.play)) {
-            // worker đã trả object video trực tiếp (id, stats...)
-            // normalize to same fields
-            data = {
-              id: json.id,
-              title: json.title || json.caption || '',
-              caption: json.caption || json.title || '',
-              cover: json.cover || '',
-              play_count: json.stats?.play ?? json.play ?? 0,
-              digg_count: json.stats?.like ?? json.like ?? 0,
-              comment_count: json.stats?.comment ?? json.comment ?? 0,
-              collect_count: json.stats?.save ?? json.save ?? json.collect_count ?? 0,
-              share_count: json.stats?.share ?? json.share ?? 0
-            };
-          } else {
-            // lỗi cấu trúc trả về
-            statusCell.textContent = 'Lỗi dữ liệu';
+          if(!data || (!data.id && !data.title)){
+            statusCell.textContent='Lỗi dữ liệu';
             statusCell.classList.add('tag-err');
-            console.warn('Unexpected response', json);
             await sleep(THROTTLE_MS);
             continue;
           }
 
-          // điền dữ liệu vào row
-          const img = row.querySelector('.cover');
-          if (data.cover) { img.src = data.cover; img.style.display = 'inline-block'; } else img.style.display = 'none';
+          // username lấy từ URL (vì TikWM ko luôn trả)
+          const userMatch = url.match(/tiktok\\.com\\/@([\\w\\.]+)/);
+          const username = userMatch ? userMatch[1] : (data.author?.unique_id || '(Không rõ)');
 
-          const fullCaption = String(data.title || data.caption || '').trim();
-          const shortText = fullCaption.length > 120 ? fullCaption.slice(0,120)+'...' : fullCaption || '(Không caption)';
-          row.querySelector('.short').textContent = shortText;
-          const moreBtn = row.querySelector('.more');
-          if (fullCaption.length > 120) {
-            moreBtn.style.display = 'inline';
-            moreBtn.textContent = 'show';
-            moreBtn.onclick = (e)=>{ e.preventDefault(); if(moreBtn.textContent==='show'){ row.querySelector('.short').textContent = fullCaption; moreBtn.textContent='hide' } else { row.querySelector('.short').textContent = shortText; moreBtn.textContent='show' } };
-          } else moreBtn.style.display = 'none';
+          const caption = data.title || data.caption || '(Không caption)';
+          const shortCaption = caption.length>100?caption.slice(0,100)+'...':caption;
+          const cover = data.cover || '';
+          const stats = data.stats || {};
+          const view = stats.play || data.play_count || 0;
+          const like = stats.like || data.digg_count || 0;
+          const comment = stats.comment || data.comment_count || 0;
+          const save = stats.save || data.collect_count || 0;
+          const share = stats.share || data.share_count || 0;
 
-          row.querySelector('.v-view').textContent = Number(data.play_count || 0).toLocaleString();
-          row.querySelector('.v-like').textContent = Number(data.digg_count || 0).toLocaleString();
-          row.querySelector('.v-comment').textContent = Number(data.comment_count || 0).toLocaleString();
-          row.querySelector('.v-save').textContent = Number(data.collect_count || 0).toLocaleString();
-          row.querySelector('.v-share').textContent = Number(data.share_count || 0).toLocaleString();
+          const img=row.querySelector('.cover'); if(cover){img.src=cover;img.style.display='inline-block';}
+          row.querySelector('.username').textContent=username;
+          row.querySelector('.caption').textContent=shortCaption;
+          row.querySelector('.view').textContent=view.toLocaleString();
+          row.querySelector('.like').textContent=like.toLocaleString();
+          row.querySelector('.comment').textContent=comment.toLocaleString();
+          row.querySelector('.save').textContent=save.toLocaleString();
+          row.querySelector('.share').textContent=share.toLocaleString();
+          row.querySelector('.videoLink a').href=url;
+          statusCell.textContent='OK'; statusCell.classList.add('tag-ok');
 
-          statusCell.textContent = 'OK';
-          statusCell.classList.remove('tag-err');
-          statusCell.classList.add('tag-ok');
+          dataStore.push({stt:i+1,username,caption,view,like,comment,save,share,url,cover});
 
-          // lưu vào dataStore cho export (lưu full caption)
-          dataStore.push({
-            stt: i+1,
-            url,
-            id: data.id || '',
-            caption: fullCaption,
-            view: Number(data.play_count || 0),
-            like: Number(data.digg_count || 0),
-            comment: Number(data.comment_count || 0),
-            save: Number(data.collect_count || 0),
-            share: Number(data.share_count || 0),
-            cover: data.cover || ''
-          });
-
-        } catch (err) {
-          console.error('Fetch error', err);
-          row.querySelector('.status').textContent = 'Lỗi kết nối';
-          row.querySelector('.status').classList.add('tag-err');
+        }catch(err){
+          console.error(err);
+          statusCell.textContent='Lỗi kết nối';
+          statusCell.classList.add('tag-err');
         }
 
-        // throttle
         await sleep(THROTTLE_MS);
-      } // end for
+        setStatus(`Đã xử lý ${i+1}/${urls.length}`);
+      }
+      setStatus('Hoàn tất!');
+    };
 
-      setStatus(`Hoàn tất. Đã xử lý ${dataStore.length}/${lines.length} video.`);
-    });
+    function makeRow(i,url){
+      const tr=document.createElement('tr');
+      tr.innerHTML=`
+        <td>${i}</td>
+        <td class="center"><img src="" class="cover" style="display:none" width="70"></td>
+        <td class="username">(Đang lấy)</td>
+        <td class="truncate caption">(Đang lấy)</td>
+        <td class="center view">—</td>
+        <td class="center like">—</td>
+        <td class="center comment">—</td>
+        <td class="center save">—</td>
+        <td class="center share">—</td>
+        <td class="videoLink center"><a href="${url}" target="_blank" class="link">Xem</a></td>
+        <td class="center status">Chưa</td>`;
+      return tr;
+    }
 
-    // CSV export
-    btnCsv.addEventListener('click', ()=> {
-      if (!dataStore.length) return alert('Không có dữ liệu để tải.');
-      const header = ['STT','URL','ID','Caption','View','Like','Comment','Save','Share','Cover'];
-      const lines = [header.join(',')];
-      dataStore.forEach(r=>{
-        const row = [
-          r.stt,
-          `"${r.url.replace(/"/g,'""')}"`,
-          `"${String(r.id).replace(/"/g,'""')}"`,
-          `"${String(r.caption).replace(/"/g,'""')}"`,
-          r.view, r.like, r.comment, r.save, r.share,
-          `"${r.cover}"`
-        ];
-        lines.push(row.join(','));
+    btnCsv.onclick=()=>{
+      if(!dataStore.length)return alert('Không có dữ liệu để tải!');
+      const header=['STT','Kênh','Caption','View','Like','Comment','Save','Share','Link','Cover'];
+      const rows=[header.join(',')];
+      dataStore.forEach(v=>{
+        rows.push([
+          v.stt,
+          `"${v.username}"`,
+          `"${v.caption.replace(/"/g,'""')}"`,
+          v.view,v.like,v.comment,v.save,v.share,
+          `"${v.url}"`,
+          `"${v.cover}"`
+        ].join(','));
       });
-      const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8;'});
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-      a.download = `tiktok_stats_${new Date().toISOString().slice(0,10)}.csv`; document.body.appendChild(a); a.click(); a.remove();
-    });
+      const blob=new Blob([rows.join('\n')],{type:'text/csv;charset=utf-8;'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+      a.download=`tiktok_stats_${new Date().toISOString().slice(0,10)}.csv`;a.click();
+    };
 
-    // XLSX export via SheetJS
-    btnXlsx.addEventListener('click', ()=> {
-      if (!dataStore.length) return alert('Không có dữ liệu để tải.');
-      const wsData = dataStore.map(r=>({
-        STT: r.stt,
-        URL: r.url,
-        ID: r.id,
-        Caption: r.caption,
-        View: r.view,
-        Like: r.like,
-        Comment: r.comment,
-        Save: r.save,
-        Share: r.share,
-        Cover: r.cover
-      }));
-      const ws = XLSX.utils.json_to_sheet(wsData);
-      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'TikTok');
-      XLSX.writeFile(wb, `tiktok_stats_${new Date().toISOString().slice(0,10)}.xlsx`);
-    });
-
-    // small helper
-    function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
-
-    // initial status
-    setStatus('Sẵn sàng');
+    btnXlsx.onclick=()=>{
+      if(!dataStore.length)return alert('Không có dữ liệu để tải!');
+      const ws=XLSX.utils.json_to_sheet(dataStore.map(v=>({
+        STT:v.stt,Kênh:v.username,Caption:v.caption,View:v.view,Like:v.like,Comment:v.comment,Save:v.save,Share:v.share,Link:v.url,Cover:v.cover
+      })));
+      const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'TikTok');
+      XLSX.writeFile(wb,`tiktok_stats_${new Date().toISOString().slice(0,10)}.xlsx`);
+    };
   </script>
 </body>
 </html>
